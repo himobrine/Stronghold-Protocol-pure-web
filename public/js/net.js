@@ -103,7 +103,10 @@ export function backoffDelay(attempt, rand = Math.random) {
 export function defaultWsUrl(loc = globalThis.location) {
   // Pure-web host mode (PRD M2): the page is talking to the in-page Lobby at loopback:<key>, not a
   // remote Node server. The host HTML (public/dev/host/host.html) attaches first; connect() then
-  // opens LoopbackTransport against that hub.
+  // opens LoopbackTransport against that hub. main.js's boot() decides this before the first
+  // connect(): an explicit ?host= wins, else it probes /healthz (the Node server routes it; a
+  // static host does not) and defaults to loopback:solo when there is no server. `net.url` is set
+  // from that decision, so this function is only the last-resort fallback (no net.url, no query).
   try {
     const q = new URLSearchParams(loc?.search || '');
     const mode = q.get('host');
@@ -111,6 +114,26 @@ export function defaultWsUrl(loc = globalThis.location) {
   } catch { /* no location / bad query: fall through to ws(s):// */ }
   if (!loc || !loc.host) return 'ws://localhost:3000/ws';
   return `${loc.protocol === 'https:' ? 'wss' : 'ws'}://${loc.host}/ws`;
+}
+
+/**
+ * Whether a Node game server serves this origin (pure-web detection, PRD M2/M3). The Node server
+ * routes `/healthz` (server/http/routes.js); a static host (GitHub Pages) has no such file, so the
+ * fetch fails or 404s. One HEAD probe, run once in main.js's boot() before the first connect(); main.js
+ * then starts the in-page host and pins net.url to loopback:<key> so connect() never re-decides.
+ * @param {{protocol: string, host: string}} [loc]
+ * @param {typeof fetch} [fetchFn]
+ * @returns {Promise<boolean>} true = a Node server answers /healthz; false = pure-web (use loopback)
+ */
+export async function probeServer(loc = globalThis.location, fetchFn = globalThis.fetch) {
+  try {
+    if (typeof fetchFn !== 'function' || !loc || !loc.host) return false; // no origin to probe: pure-web default
+    const base = `${loc.protocol === 'https:' ? 'https' : 'http'}://${loc.host}`;
+    const res = await fetchFn(`${base}/healthz`, { method: 'HEAD', cache: 'no-store' });
+    return !!res && res.ok;
+  } catch {
+    return false; // static host / offline / CORS: pure-web default
+  }
 }
 
 const WS_OPEN = 1;

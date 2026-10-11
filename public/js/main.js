@@ -36,7 +36,7 @@ import { useErrorBoundary } from '../vendor/hooks.module.js';
 import { html, UiHosts, Button, MicroLabel, closeAllDialogs } from './ui/components.js';
 import { ConnectionBanner } from './ui/connBanner.js';
 import { ToastHost, toast, toastError, describeError } from './ui/toasts.js';
-import { net, identity, NetError } from './net.js';
+import { net, identity, NetError, probeServer } from './net.js';
 import { store, useStore, emptyMatch, selectRoute, sessionResetNotice, isSpectating } from './store.js';
 import { data } from './data.js';
 import { GAME_FILES } from './ui/gameComponents.js';
@@ -352,16 +352,30 @@ async function boot() {
   // A page restored from the back/forward cache has a dead socket and a stale token choice: start over.
   window.addEventListener('pageshow', (ev) => { if (ev.persisted) location.reload(); });
 
-  // Pure-web host mode (PRD M2): ?host=solo (or host=1) boots the in-page Lobby before any Net
-  // connect, so net.js's defaultWsUrl → loopback:solo finds a host already on the hub. The host
-  // lives in the same document (same loopbackHub singleton). Errors here are non-fatal: the page
-  // still boots and shows a disconnected lobby.
-  const hostMode = (() => {
-    try {
-      const v = new URLSearchParams(location.search).get('host');
-      return v && v !== '0' ? (v === '1' ? 'solo' : v) : null;
-    } catch { return null; }
+  // Pure-web host mode (PRD M2/M3): a static host (GitHub Pages) has no Node server behind it, so
+  // "the page loaded" must mean "the in-page host is the server". Boot the in-page Lobby (the
+  // loopbackHub singleton) before any Net connect, so net.js's defaultWsUrl → loopback:solo finds a
+  // host already on the hub. The decision, in order:
+  //   1. ?host=<key> (or host=1) — explicit in-page host, no probe;
+  //   2. ?host=0 / ?server=1 — explicit ws(s):// (the Node server, or a static preview proxying one), no probe;
+  //   3. otherwise probe /healthz once (the Node server routes it; a static host does not) and
+  //      default to the in-page solo host when there is no server. The probe is one HEAD request
+  //      (well under the hello timeout); a failure (static host / offline / CORS) is pure-web.
+  // The host lives in the same document (same loopbackHub singleton). Errors here are non-fatal:
+  // the page still boots and shows a disconnected lobby.
+  const hostParam = (() => {
+    try { const v = new URLSearchParams(location.search).get('host'); return v && v !== '0' ? (v === '1' ? 'solo' : v) : null; }
+    catch { return null; }
   })();
+  const serverForced = (() => {
+    try {
+      const q = new URLSearchParams(location.search);
+      return q.get('host') === '0' || q.get('server') === '1';
+    } catch { return false; }
+  })();
+  // ?host= wins (no probe); else, when not forced to a server, probe /healthz → default solo.
+  let hostMode = hostParam || null;
+  if (!hostMode && !serverForced) hostMode = (await probeServer()) ? null : 'solo';
   if (hostMode) {
     try {
       // The host graph is a pre-built bundle (tools/build-host.mjs → public/dev/host/host.js), not
@@ -375,6 +389,9 @@ async function boot() {
       const host = await import(`/js/hostPage.js?v=${HOST_BUILD}`);
       await host.startHost({ key: hostMode });
       globalThis.__SP_HOST__ = host;
+      // Pin the transport URL so connect() uses loopback even after a deploy clears the query
+      // string (defaultWsUrl would otherwise fall back to ws(s):// for a param-less root).
+      net.url = `loopback:${hostMode}`;
       console.info('[app] in-page host ready', hostMode);
     } catch (err) {
       console.error('[app] in-page host failed', err);

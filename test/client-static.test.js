@@ -421,8 +421,31 @@ describe('net.js', () => {
 
   test('defaultWsUrl', async () => {
     const { defaultWsUrl } = await mod('net.js');
-    assert.equal(defaultWsUrl({ protocol: 'http:', host: 'a:3000' }), 'ws://a:3000/ws');
-    assert.equal(defaultWsUrl({ protocol: 'https:', host: 'x.io' }), 'wss://x.io/ws');
+    // ?host= maps to loopback:<key> (host=1 is the short form for solo).
+    assert.equal(defaultWsUrl({ protocol: 'https:', host: 'x.io', search: '?host=solo' }), 'loopback:solo');
+    assert.equal(defaultWsUrl({ protocol: 'https:', host: 'x.io', search: '?host=1' }), 'loopback:solo');
+    assert.equal(defaultWsUrl({ protocol: 'https:', host: 'x.io', search: '?host=coop' }), 'loopback:coop');
+    // no ?host= falls back to ws(s)://host/ws (the Node server; main.js pins net.url for pure-web).
+    assert.equal(defaultWsUrl({ protocol: 'http:', host: 'a:3000', search: '' }), 'ws://a:3000/ws');
+    assert.equal(defaultWsUrl({ protocol: 'https:', host: 'x.io', search: '' }), 'wss://x.io/ws');
+    assert.equal(defaultWsUrl({ protocol: 'http:', host: 'a:3000', search: '?server=1' }), 'ws://a:3000/ws');
+    assert.equal(defaultWsUrl({ protocol: 'http:', host: 'a:3000', search: '?host=0' }), 'ws://a:3000/ws');
+    assert.equal(defaultWsUrl(undefined), 'ws://localhost:3000/ws', 'no location → localhost default');
+  });
+
+  test('probeServer: /healthz answers → Node server; 404 / error / no fetch → pure-web (loopback)', async () => {
+    const { probeServer } = await mod('net.js');
+    const loc = { protocol: 'https:', host: 'x.io' };
+    const okFetch = async (url) => {
+      assert.equal(url, 'https://x.io/healthz', 'probes /healthz on the page origin');
+      return { ok: true, status: 200 };
+    };
+    assert.equal(await probeServer(loc, okFetch), true, 'Node server answers /healthz');
+    const staticFetch = async () => ({ ok: false, status: 404 });
+    assert.equal(await probeServer(loc, staticFetch), false, 'static host 404 → pure-web');
+    assert.equal(await probeServer(loc, async () => { throw new Error('offline'); }), false, 'probe failure → pure-web');
+    assert.equal(await probeServer(undefined, okFetch), false, 'no location → pure-web (nothing to probe)');
+    assert.equal(await probeServer({ protocol: 'http:', host: '' }, okFetch), false, 'empty host → pure-web');
   });
 
   test('connect without a name → connected + ping; setName → hello with token & version', async () => {
@@ -1228,6 +1251,17 @@ describe('multi-device & browser compatibility (static)', () => {
     const first = staticImports(src)[0];
     assert.equal(first?.spec, './ui/compat.js');
     assert.match(src, /installDeviceSupport\(\)/);
+  });
+
+  test('main.js boots the in-page host by default (pure-web) and pins net.url to loopback', () => {
+    // Regression: a static host (GitHub Pages) has no Node server behind it, so "the page loaded"
+    // must mean "the in-page host is the server" — the default entry is loopback:solo (PRD M2/M3).
+    const src = readFileSync(path.join(PUBLIC, 'js/main.js'), 'utf8');
+    assert.match(src, /probeServer\(\)/, 'boot() probes /healthz to decide host vs server');
+    assert.match(src, /net\.url = `loopback:\$\{hostMode\}`/, 'host mode pins net.url so connect() uses loopback');
+    assert.match(src, /serverForced/, 'serverForced (host=0 / server=1) skips the host, no probe');
+    assert.match(src, /hostParam/, 'an explicit ?host= wins without a probe');
+    assert.match(src, /await host\.startHost\(/, 'the in-page host is started before any connect');
   });
 
   test('client modules use no bare specifiers (import maps need Safari 16.4+) — ui/fieldHost.js included', () => {
