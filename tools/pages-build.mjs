@@ -81,7 +81,12 @@ function checkEscapes(out, base) {
       let abs;
       if (spec.startsWith('/')) abs = normalizeUrl(spec);
       else if (spec.startsWith('.')) abs = normalizeUrl(`${base}/${dir}/${spec}`);
-      else continue; // bare specifier — the import map owns it
+      else {
+        // A bare specifier with a file extension is a path that lost its leading '/'; the import
+        // map only names packages ('preact', 'htm'), so nothing would ever resolve it.
+        if (/\.\w+$/.test(spec)) problems.push(`${rel}: bare path '${spec}'`);
+        continue;
+      }
       if (abs !== base && !abs.startsWith(`${base}/`)) problems.push(`${rel}: '${spec}' → ${abs}`);
     }
   }
@@ -163,7 +168,7 @@ function main() {
     let dst = src;
     if (base) {
       dst = rewriteAbs(dst, base);
-      const depth = Math.max(0, relParts.length - 2); // directories the file sits under out/
+      const depth = Math.max(0, relParts.length - 1); // directories the file sits under out/
       dst = rewriteRel(dst, depth);
     }
     if (isManifest && base) {
