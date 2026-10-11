@@ -67,7 +67,7 @@ import { Worker, isMainThread, parentPort, workerData } from 'node:worker_thread
 import { getData } from '../server/data.js';
 import { DataSource } from '../server/sim/simdata.js';
 import { buildBattleSpec, createBattleFromSpec } from '../server/sim/spec.js';
-import { createRng, deriveSeed } from '../server/sim/rng.js';
+import { createRng, deriveSeed, rngDraws } from '../server/sim/rng.js';
 import { GameData } from '../server/match/gamedata.js';
 import { setupMatchWaves, buildNormalWave, buildBossWave, buildUniteWave, isFlyKey, routeByMotion, roundMods } from '../server/match/waves.js';
 import { buildDeployMap, positionClass, canPlace, ownerRangeKeys, tileKey } from '../server/match/board.js';
@@ -106,15 +106,6 @@ const hex8 = (h) => (h >>> 0).toString(16).padStart(8, '0');
 const r2 = (v) => (Number.isFinite(v) ? Math.round(v * 100) / 100 : v === Infinity ? 'inf' : null);
 const int = (v) => (Number.isFinite(v) ? Math.round(v) : null);
 const sorted = (obj) => { const o = {}; for (const k of Object.keys(obj).sort(byId)) o[k] = obj[k]; return o; };
-
-// mulberry32 (server/sim/rng.js) adds 0x6d2b79f5 to its state per draw: draws = (state − initial) × inverse mod 2³²
-const RNG_STEP = 0x6d2b79f5;
-const RNG_INV = (() => { let x = RNG_STEP; for (let i = 0; i < 5; i++) x = Math.imul(x, 2 - Math.imul(RNG_STEP, x)); return x >>> 0; })();
-/** Number of values drawn from a createRng(seed) stream whose state is now `state`. */
-export function rngDraws(seed, state) {
-  const s0 = (Number(seed) >>> 0) || 0x9e3779b9;
-  return Math.imul(((state >>> 0) - s0) >>> 0, RNG_INV) >>> 0;
-}
 
 // ---------------------------------------------------------------------------------------------------------------
 // battle runner

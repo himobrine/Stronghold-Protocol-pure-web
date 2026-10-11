@@ -3,9 +3,12 @@
 /**
  * Create a deterministic PRNG. Returns a function producing floats in [0, 1) with helper methods.
  * @param {number} seed uint32 (any number is coerced)
+ * @param {number} [resumeState] a previously observed `rng.state()` value to continue from (PRD M3
+ *   snapshot restore); when given, the stream continues exactly where it left off.
  */
-export function createRng(seed = 1) {
+export function createRng(seed = 1, resumeState = null) {
   let s = (Number(seed) >>> 0) || 0x9e3779b9;
+  if (resumeState != null) s = Number(resumeState) >>> 0;
   const next = () => {
     s = (s + 0x6d2b79f5) >>> 0;
     let t = s;
@@ -53,4 +56,20 @@ export function deriveSeed(seed, salt) {
     h ^= h >>> 13;
   }
   return h >>> 0;
+}
+
+// mulberry32 adds 0x6d2b79f5 to its state per draw: draws = (state − initial) × inverse mod 2³²
+const RNG_STEP = 0x6d2b79f5;
+const RNG_INV = (() => { let x = RNG_STEP; for (let i = 0; i < 5; i++) x = Math.imul(x, 2 - Math.imul(RNG_STEP, x)); return x >>> 0; })();
+
+/** Number of values drawn from a createRng(seed) stream whose state is now `state`. */
+export function rngDraws(seed, state) {
+  const s0 = (Number(seed) >>> 0) || 0x9e3779b9;
+  return Math.imul(((state >>> 0) - s0) >>> 0, RNG_INV) >>> 0;
+}
+
+/** Advance a createRng(seed) stream by `n` draws without touching a live rng (snapshot planning). */
+export function rngStateAfter(seed, n) {
+  const s0 = (Number(seed) >>> 0) || 0x9e3779b9;
+  return (s0 + Math.imul(n >>> 0, RNG_STEP)) >>> 0;
 }
