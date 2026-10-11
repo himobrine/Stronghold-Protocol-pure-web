@@ -28,6 +28,10 @@ import { setDefaultDataProvider } from '../server/dataGetters.js';
 import { Lobby } from '../server/lobby.js';
 import { CoreNetwork, SessionRegistry, CLOSE } from '../server/netCore.js';
 import { randomHex } from '../server/rand.js';
+import { Match } from '../server/match/Match.js';
+import { VirtualScheduler } from '../server/match/scheduler.js';
+import { snapshotMatch, restoreMatch } from '../server/match/serialize.js';
+import { putSnapshot, getSnapshot, deleteSnapshot } from './snapshotStore.js';
 
 export { loopbackHub, LoopbackHub, LoopbackTransport, pickTransport };
 
@@ -101,7 +105,8 @@ export class HostNetwork extends CoreNetwork {
  * Build the in-page host: fetch the game data, inject it, and wire a Lobby to a HostNetwork behind
  * `hub` at `key` (solo: the page-global `loopbackHub` and key "solo"; co-op: a PeerJS-backed hub).
  * @param {{ hub?: LoopbackHub, key?: string, data?: object, log?: object, now?: () => number,
- *           MatchClass?: Function, seedFn?: () => number, options?: object }} [opts]
+ *           MatchClass?: Function, seedFn?: () => number, options?: object,
+ *           snapshotStoreDeps?: { indexedDB?: IDBFactory }, snapshot?: boolean, snapshotEveryMs?: number }} [opts]
  * @returns {Promise<{ network: HostNetwork, lobby: Lobby, registry: SessionRegistry, data: object,
  *                     key: string, hub: LoopbackHub, detach: () => void }>}
  */
@@ -114,9 +119,56 @@ export async function startHost(opts = {}) {
   setDefaultDataProvider(() => data);
 
   const registry = new SessionRegistry({ randomHex });
-  const lobby = new Lobby({ registry, log, MatchClass: opts.MatchClass, getData: () => data, seedFn: opts.seedFn, options: opts.options });
+  // PRD M3: solo snapshot persistence. `snapshot: false` opts out (tests, co-op hosts). The restore hook rebuilds a
+  // room + Match from a stored snapshot; the interval persists the running Match every `snapshotEveryMs`.
+  const wantSnapshot = opts.snapshot !== false && key === 'solo';
+  const snapshotEveryMs = Number.isFinite(opts.snapshotEveryMs) && opts.snapshotEveryMs > 0 ? opts.snapshotEveryMs : 15_000;
+  const snapKey = `solo-${key}`;
+  const snapDeps = opts.snapshotStoreDeps || {};
+  const intents = [];
+  let snapshotTimer = null;
+  let restoredRoom = null;
+  const matchRestore = wantSnapshot
+    ? (snap, wiring) => restoreMatch(snap, { data, Match, VirtualScheduler, send: wiring.send, broadcast: wiring.broadcast, onEnd: wiring.onEnd, log })
+    : null;
+  const onMatchIntent = wantSnapshot
+    ? (playerId, msg) => { if (msg && typeof msg.t === 'string' && msg.t.startsWith('g.')) intents.push({ playerId, t: msg.t, ...msg }); }
+    : null;
+  const lobby = new Lobby({ registry, log, MatchClass: opts.MatchClass, getData: () => data, seedFn: opts.seedFn, options: opts.options, matchRestore, onMatchIntent });
+
+  if (wantSnapshot) {
+    try {
+      const snap = await getSnapshot(snapKey, snapDeps);
+      if (snap) restoredRoom = lobby.restoreFromSnapshot(snap);
+      if (restoredRoom) {
+        log.info?.(`[host] solo snapshot restored (room ${restoredRoom.code}, round ${snap.round})`);
+        // keep the replayed intent history so the next periodic snapshot still replays from the original start
+        for (const it of snap.intents || []) intents.push(it);
+      } else if (snap) await deleteSnapshot(snapKey, snapDeps);
+    } catch (e) { log.warn?.('[host] snapshot restore failed (starting fresh)', e); }
+  }
+
   const network = new HostNetwork({ registry, handler: lobby, log, now: opts.now });
 
+  if (wantSnapshot) {
+    // persist the running solo match periodically (a fresh match, or one resumed from a restored snapshot — the
+    // intent log below already carries the pre-refresh history, so the next snapshot replays from the original start)
+    snapshotTimer = setInterval(() => {
+      try {
+        const room = [...lobby.rooms.values()].find((r) => r.mode === 'solo' && r.match);
+        if (!room || !room.match) return;
+        const snap = snapshotMatch(room.match, intents);
+        putSnapshot(snapKey, snap, snapDeps).catch((e) => log.warn?.('[host] snapshot save failed', e));
+      } catch (e) { log.warn?.('[host] snapshot capture failed', e); }
+    }, snapshotEveryMs);
+    snapshotTimer.unref?.();
+  }
+
   const detach = hub.attach(key, { open: (ep) => network.handleConnection(ep), close: (ep) => { try { ep.close?.(); } catch { /* ignore */ } } });
-  return { network, lobby, registry, data, key, hub, detach };
+  const close = () => {
+    if (snapshotTimer) { clearInterval(snapshotTimer); snapshotTimer = null; }
+    try { network.close(); } catch { /* ignore */ }
+    try { detach(); } catch { /* ignore */ }
+  };
+  return { network, lobby, registry, data, key, hub, detach, close, intents, snapKey };
 }

@@ -53,6 +53,12 @@ export function snapshotMatch(m, intents = []) {
     seats: [...m.players.values()].map((ps) => ({
       playerId: ps.playerId, seat: ps.seat, name: ps.name, isBot: !!ps.isBot,
       connected: !ps.left && !!ps.connected, left: !!ps.left, alive: !!ps.alive, autoplay: !!ps.autoplay,
+      // the checked operator loadout / 潜能 / ownership / DIY picks the PlayerState froze at construction — needed so
+      // the replayed Match re-derives the same gd / diy stock / stand-ins (shared/protocol.js checks re-run on restore)
+      loadout: ps.loadout && Object.keys(ps.loadout).length ? ps.loadout : null,
+      ops: ps.ops && Object.keys(ps.ops).length ? ps.ops : null,
+      notOwned: ps.standIns && ps.standIns.length ? [...ps.standIns] : null,
+      diy: ps.diy && Object.keys(ps.diy).length ? ps.diy : null,
     })),
     capturedAt: Date.now(),
   };

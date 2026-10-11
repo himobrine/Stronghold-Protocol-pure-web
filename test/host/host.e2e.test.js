@@ -103,4 +103,43 @@ describe('in-page host mode (headless Chrome)', { skip: !ENABLED && 'set SP_E2E=
     assert.ok(store.room.inMatch === false || store.room.inMatch === undefined || store.room.inMatch === null, 'the room is not in a match yet');
     assert.deepEqual(errors, [], `no uncaught page errors (${errors.join('; ')})`);
   });
+
+  test('a solo room can be built and the match reaches PREP (M3 restore prep)', async (t) => {
+    const page = await browser.newPage();
+    t.after(() => page.close());
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    const base = `http://127.0.0.1:${srv.address().port}`;
+    await page.goto(`${base}/index.html?host=1`, { waitUntil: 'networkidle0', timeout: 60000 });
+    await page.waitForFunction(() => {
+      const b = document.getElementById('boot');
+      return !b || b.classList.contains('is-done');
+    }, { timeout: 60000 });
+
+    // IndexedDB is the M3 snapshot store (PRD: solo run kept 24 h). Verify it opens on this origin.
+    const idbOk = await page.evaluate(async () => {
+      try {
+        const name = await new Promise((res, rej) => {
+          const q = indexedDB.open('sp-probe', 1);
+          q.onsuccess = () => { res(q.result.name); q.result.close(); };
+          q.onerror = () => rej(q.error);
+        });
+        return { ok: true, name };
+      } catch (e) { return { ok: false, err: String(e) }; }
+    });
+    assert.equal(idbOk.ok, true, `IndexedDB opens on the http origin (err=${idbOk.err})`);
+
+    const st = await page.evaluate(async () => {
+      const net = globalThis.__SP__?.net;
+      net?.setName?.('M3Probe');
+      await new Promise((r) => setTimeout(r, 800));
+      await net.request('room.create', { mode: 'solo', difficulty: 'FUNNY' });
+      await new Promise((r) => setTimeout(r, 500));
+      const store = globalThis.__SP__?.store;
+      return { code: store?.get()?.room?.code, playerId: net?.playerId, status: net?.status };
+    });
+    assert.ok(st.code, 'a solo room exists');
+    assert.equal(st.status, 'online', 'client is online over loopback');
+    assert.deepEqual(errors, [], `no uncaught page errors (${errors.join('; ')})`);
+  });
 });

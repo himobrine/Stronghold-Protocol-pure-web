@@ -256,7 +256,7 @@ export class Lobby {
    *   options?: Partial<typeof LOBBY_DEFAULTS>,
    * }} opts
    */
-  constructor({ registry, log = noopLog, MatchClass = DefaultMatch, getData = defaultGetData, now = Date.now, seedFn, options = {} }) {
+  constructor({ registry, log = noopLog, MatchClass = DefaultMatch, getData = defaultGetData, now = Date.now, seedFn, options = {}, matchRestore = null, onMatchIntent = null }) {
     this.registry = registry;
     this.log = log;
     this.MatchClass = MatchClass;
@@ -264,6 +264,19 @@ export class Lobby {
     this.now = now;
     this.seedFn = seedFn || (() => randomInt(2 ** 32));
     this.opts = { ...LOBBY_DEFAULTS, ...options };
+    /**
+     * Optional snapshot-restore hook (PRD M3, browser host only): `(snap) => Match | null`. The host wires this to
+     * server/match/serialize.js restoreMatch (which needs VirtualScheduler — a Node test / browser-host concern the
+     * lobby never imports directly). Node's real server leaves it null: the lobby never restores on its own.
+     * @type {((snap: object) => any) | null}
+     */
+    this.matchRestore = typeof matchRestore === 'function' ? matchRestore : null;
+    /**
+     * Optional intent tap (PRD M3, browser host only): called with `(playerId, msg)` for every 'g.*' / 'b.*' frame
+     * routed to a running match, before the match handles it — the host records these into the snapshot's intent log.
+     * @type {((playerId: string, msg: object) => void) | null}
+     */
+    this.onMatchIntent = typeof onMatchIntent === 'function' ? onMatchIntent : null;
     /** @type {Map<string, Room>} */
     this.rooms = new Map();
     /** @type {Map<string, NodeJS.Timeout>} lobby grace timers by playerId */
@@ -717,6 +730,53 @@ export class Lobby {
   // Match wiring
   // ---------------------------------------------------------------------------------------------------
 
+  /**
+   * Rebuild a room + its running Match from a snapshot (PRD M3, browser host only): the host calls this on boot
+   * when IndexedDB still holds a solo snapshot (host/snapshotStore.js getSnapshot). `snap.seats` carries the
+   * checked loadout / ops / notOwned / diy so the restored Match re-derives the same PlayerState. Returns the
+   * restored room, or null when no restore hook is wired (the Node server never restores) or the rebuild failed —
+   * the caller then simply starts fresh.
+   * @param {object} snap a server/match/serialize.js snapshotMatch() result
+   * @returns {Room | null}
+   */
+  restoreFromSnapshot(snap) {
+    if (!this.matchRestore || !snap || typeof snap !== 'object' || typeof snap.v !== 'number' || snap.mode !== 'solo' || this.rooms.has(snap.roomCode)) return null;
+    const code = snap.roomCode;
+    const room = new Room(code, snap.mode, snap.difficulty, this.now());
+    room.matchCount = snap.round > 0 ? snap.round : 1;
+    for (const s of snap.seats || []) {
+      if (!s || typeof s.playerId !== 'string' || s.seat < 0 || s.seat >= MAX_SEATS) continue;
+      room.seats[s.seat] = {
+        seat: s.seat, playerId: s.playerId, name: s.name, isBot: !!s.isBot, ready: false,
+        connected: false, left: !!s.left,
+        loadout: s.loadout || null, ops: s.ops || null, notOwned: s.notOwned || null, diy: s.diy || null,
+      };
+      if (!s.isBot && !room.hostId) room.hostId = s.playerId;
+    }
+    const ctx = { live: true, ended: false, disposed: false, match: null, lastPublic: null, sharedResult: null, results: new Map() };
+    let match;
+    try {
+      match = this.matchRestore(snap, {
+        send: (playerId, msg) => (ctx.live ? this.matchSend(room, ctx, playerId, msg) : false),
+        broadcast: (msg) => { if (ctx.live) this.matchBroadcast(room, ctx, msg); },
+        onEnd: (summary) => this.onMatchEnd(room, ctx, summary),
+      });
+    } catch (e) {
+      this.log.error(`[lobby] ${code} snapshot restore failed`, e);
+      return null;
+    }
+    if (!match) return null;
+    ctx.match = match;
+    room.match = match;
+    room.matchCtx = ctx;
+    room.replay = null;
+    this.rooms.set(code, room);
+    for (const s of room.seats) if (s && !s.isBot) { const sess = this.registry.byId(s.playerId); if (sess) sess.roomCode = code; }
+    this.log.info(`[lobby] ${code} restored from snapshot (${snap.mode}/${snap.difficulty}, round ${snap.round})`);
+    this.broadcastState(room);
+    return room;
+  }
+
   /** @param {Room} room @param {string | null} [key] per-network limit key of the starter */
   startMatch(room, key = null) {
     const host = room.seatOf(room.hostId);
@@ -922,6 +982,7 @@ export class Lobby {
     }
     // a spectator only watches (header): nothing else of it ever reaches the match
     if (msg.t !== 'g.watch' && room.spectatorOf(session.playerId)) return fail(ERR.SPECTATOR);
+    if (this.onMatchIntent) { try { this.onMatchIntent(session.playerId, msg); } catch (e) { this.log.warn?.('[lobby] onMatchIntent threw', e); } }
     let res;
     try {
       res = room.match.handle(session.playerId, msg);
