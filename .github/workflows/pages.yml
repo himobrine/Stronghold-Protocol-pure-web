@@ -36,6 +36,9 @@ jobs:
       - name: Install (npm ci → postinstall copies public/vendor)
         run: npm ci --no-audit --no-fund
 
+      - name: Bundle the in-page host (PRD M2 → public/dev/host/host.js)
+        run: node tools/build-host.mjs
+
       - name: Assemble the static site
         run: node tools/pages-build.mjs --base "/${{ github.event.repository.name }}"
 

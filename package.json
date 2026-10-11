@@ -38,6 +38,8 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit --checkJs -p jsconfig.json",
     "check:imports": "node tools/check-imports.mjs",
+    "build:host": "node tools/build-host.mjs",
+    "build:pages": "node tools/build-host.mjs && node tools/pages-build.mjs",
     "ci": "node tools/ci.mjs",
     "package": "node tools/package.mjs",
     "package:lite": "node tools/package.mjs --lite"
@@ -56,6 +58,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "esbuild": "^0.28.2",
     "eslint": "^10.12.0",
     "globals": "^17.13.0",
     "puppeteer-core": "^25.12.0",

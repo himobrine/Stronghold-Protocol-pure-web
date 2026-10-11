@@ -169,9 +169,17 @@ async function loadKitFile(file) {
   }
 }
 
-const MODULES = await Promise.all(KIT_FILES.map((group) => Promise.all(group.map(loadKitFile))));
-const STANDIN_MODULES = await Promise.all(STANDIN_KIT_FILES.map(loadKitFile));
-const OPERATOR_MODULES = await Promise.all(OPERATOR_KIT_FILES.map(loadKitFile));
+/* global __SP_BUNDLE__ */
+const BUNDLED = typeof __SP_BUNDLE__ !== 'undefined' && __SP_BUNDLE__;
+const MODULES = BUNDLED
+  ? await Promise.all(KIT_FILES.map((group) => Promise.all(group.map((file) => import(`./ops/${file}`)))))
+  : await Promise.all(KIT_FILES.map((group) => Promise.all(group.map(loadKitFile))));
+const STANDIN_MODULES = BUNDLED
+  ? await Promise.all(STANDIN_KIT_FILES.map((file) => import(`./ops/${file}`)))
+  : await Promise.all(STANDIN_KIT_FILES.map(loadKitFile));
+const OPERATOR_MODULES = BUNDLED
+  ? await Promise.all(OPERATOR_KIT_FILES.map((file) => import(`./ops/${file}`)))
+  : await Promise.all(OPERATOR_KIT_FILES.map(loadKitFile));
 const registryOf = (m) => (m && m.default && typeof m.default === 'object' ? m.default : {});
 
 /** The registry of each tier group (index 0 = tier 1): baseChessId → kit builder, in KIT_FILES order. */

@@ -101,6 +101,14 @@ export function backoffDelay(attempt, rand = Math.random) {
  * @returns {string}
  */
 export function defaultWsUrl(loc = globalThis.location) {
+  // Pure-web host mode (PRD M2): the page is talking to the in-page Lobby at loopback:<key>, not a
+  // remote Node server. The host HTML (public/dev/host/host.html) attaches first; connect() then
+  // opens LoopbackTransport against that hub.
+  try {
+    const q = new URLSearchParams(loc?.search || '');
+    const mode = q.get('host');
+    if (mode && mode !== '0') return `loopback:${mode === '1' ? 'solo' : mode}`;
+  } catch { /* no location / bad query: fall through to ws(s):// */ }
   if (!loc || !loc.host) return 'ws://localhost:3000/ws';
   return `${loc.protocol === 'https:' ? 'wss' : 'ws'}://${loc.host}/ws`;
 }

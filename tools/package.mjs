@@ -245,7 +245,7 @@ export function artPlan(root, { lite = false, jpVoice = FULL_ZIP_JP_VOICE } = {}
   return { files: [...files].sort(), missing: missing.sort(), orphans, held: held.sort(), local };
 }
 
-const URL_MOUNTS = [['/data/', 'data/'], ['/shared/', 'shared/'], ['/sim/', 'server/sim/']];
+const URL_MOUNTS = [['/data/', 'data/'], ['/shared/', 'shared/'], ['/sim/', 'server/sim/'], ['/dev/', 'public/dev/']];
 
 /** The repository path an import specifier of `fromRel` names, or null (an npm package or a Node builtin). */
 export function resolveSpecifier(fromRel, spec) {
@@ -259,7 +259,10 @@ export function resolveSpecifier(fromRel, spec) {
 /**
  * Imports of shipped modules that name a repository file the package lacks. public/vendor/ is npm ci's postinstall
  * output; a specifier naming no file here (an import inside a template string, e.g. server/http/static.js's /data.js
- * shim) is not an import of the package.
+ * shim) is not an import of the package. A URL-mount import of public/dev/ (e.g. hostPage.js's `/dev/host/host.js`)
+ * names a pre-built browser-only artifact that the Pages layout serves but the lite npm release never ships — like
+ * public/vendor/, it is not a packaging problem. A page-relative `../dev/mock.js` is not a URL mount and still
+ * reports when the lite plan leaves the file out.
  */
 export function importProblems(root, files) {
   const shipped = new Set(files);
@@ -270,7 +273,7 @@ export function importProblems(root, files) {
     try { src = fs.readFileSync(path.join(root, rel), 'utf8'); } catch { continue; }
     for (const { spec, line } of findSpecifiers(src)) {
       const target = resolveSpecifier(rel, spec);
-      if (!target || shipped.has(target) || target.startsWith('public/vendor/') || !isFile(path.join(root, target))) continue;
+      if (!target || shipped.has(target) || target.startsWith('public/vendor/') || (spec.startsWith('/') && target.startsWith('public/dev/')) || !isFile(path.join(root, target))) continue;
       out.push(`${rel}:${line} imports ${spec} (not shipped)`);
     }
   }

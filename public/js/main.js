@@ -61,6 +61,11 @@ const RESTORE_GRACE_MS = 1500;
 const JOIN_DELAY_MS = 350;
 const TICKER_KEEP = 20;
 const EMOTE_KEEP = 20;
+// Bumped whenever the host bundle (public/dev/host/host.js) changes: a live page keeps the modules
+// it imported at load time (ui/buildGuard.js), so a deploy must not be able to reach an open tab's
+// in-page host. The query string is part of the module URL and is rewritten by pages-build.mjs's
+// relative-import rewriter only when it climbs past the base — here it is absolute and stays.
+const HOST_BUILD = '20261011';
 
 const SCREENS = { title: TitleScreen, lobby: LobbyScreen, room: RoomScreen, game: GameScreen };
 
@@ -346,6 +351,36 @@ async function boot() {
   installDeviceSupport();
   // A page restored from the back/forward cache has a dead socket and a stale token choice: start over.
   window.addEventListener('pageshow', (ev) => { if (ev.persisted) location.reload(); });
+
+  // Pure-web host mode (PRD M2): ?host=solo (or host=1) boots the in-page Lobby before any Net
+  // connect, so net.js's defaultWsUrl → loopback:solo finds a host already on the hub. The host
+  // lives in the same document (same loopbackHub singleton). Errors here are non-fatal: the page
+  // still boots and shows a disconnected lobby.
+  const hostMode = (() => {
+    try {
+      const v = new URLSearchParams(location.search).get('host');
+      return v && v !== '0' ? (v === '1' ? 'solo' : v) : null;
+    } catch { return null; }
+  })();
+  if (hostMode) {
+    try {
+      // The host graph is a pre-built bundle (tools/build-host.mjs → public/dev/host/host.js), not
+      // host/entry.js directly: that file imports node:fs-bearing server modules the browser cannot
+      // load. The query string busts the module cache across deploys (HOST_BUILD is bumped with
+      // every host-bundle change).
+      //
+      // Always start the host through the page's own startHost() (public/js/hostPage.js): the
+      // bundle re-exports its internal loopbackHub, but net.js's pickTransport() uses shared/
+      // transport.js's page-global loopbackHub. Two hubs = a solo room no client can ever join.
+      const host = await import(`/js/hostPage.js?v=${HOST_BUILD}`);
+      await host.startHost({ key: hostMode });
+      globalThis.__SP_HOST__ = host;
+      console.info('[app] in-page host ready', hostMode);
+    } catch (err) {
+      console.error('[app] in-page host failed', err);
+    }
+  }
+
   // Pick this tab's reconnect token (asks other live tabs; ≤150 ms) while fonts load.
   const identityReady = identity.init();
 

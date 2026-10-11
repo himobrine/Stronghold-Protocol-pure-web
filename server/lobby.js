@@ -98,16 +98,21 @@
 //     code; a player never switches to spectating in place (ALREADY). Disconnect / grace / reconnect / expiry work as for
 //     a player seat (the seat is kept and given back on resume).
 
-import { randomBytes, randomInt } from 'node:crypto';
+import { randomHex, randomInt } from './rand.js';
 import { ERR, MAX_SEATS, MAX_SPECTATORS, ROOM_CODE_LEN, modeIdFor } from '../shared/constants.js';
 import { checkLoadout, checkLoadoutOps, cultivationCharIds, checkNotOwned, checkDiyPicks } from '../shared/protocol.js';
-import { encode, isDroppable, isErrCode, sendRaw, sendSession } from './net.js';
-import { getData as defaultGetData, lookup } from './data.js';
+import { encode, isDroppable, isErrCode, sendRaw, sendSession } from './netCore.js';
+import { lookup } from './dataGetters.js';
 import { Match as DefaultMatch } from './match/Match.js';
 import { KITTED_CHARS } from './sim/content/kits/index.js';
 
 /** Room code alphabet: uppercase letters without I and O (and no digits, so no 0/1). */
 export const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+
+/** Fallback when a host builds a Lobby without `getData` (both hosts pass one: server/index.js, host/entry.js). */
+function defaultGetData() {
+  throw new Error('[lobby] no game data: pass getData to the Lobby constructor');
+}
 
 /** Tunables. */
 export const LOBBY_DEFAULTS = Object.freeze({
@@ -557,7 +562,7 @@ export class Lobby {
     const used = new Set(room.seats.filter((s) => s && s.isBot).map((s) => s.name));
     const name = BOT_NAMES.find((n) => !used.has(n)) || `AI·${idx + 1}`;
     let playerId;
-    do playerId = 'ai_' + randomBytes(4).toString('hex'); while (room.seatOf(playerId));
+    do playerId = 'ai_' + randomHex(4); while (room.seatOf(playerId));
     room.seats[idx] = { seat: idx, playerId, name, isBot: true, ready: true, connected: true, left: false };
     this.broadcastState(room);
     return OK;
@@ -779,7 +784,11 @@ export class Lobby {
     room.matchCtx = null;
     room.matchKey = null;
     room.replay = this.buildReplay(room, ctx);
-    setImmediate(() => this.disposeMatchCtx(ctx));
+    // Dispose the match on the next macrotask so the final broadcasts flush first. `setImmediate`
+    // is Node-only; the browser host runtime (PRD M2) falls back to setTimeout(..., 0), which is
+    // the next macrotask there too. Guarded so this module needs no Node globals.
+    const defer = typeof globalThis.setImmediate === 'function' ? globalThis.setImmediate : (fn) => setTimeout(fn, 0);
+    defer(() => this.disposeMatchCtx(ctx));
     this.log.info(`[lobby] ${room.code} match #${room.matchCount} ended`);
     for (let i = 0; i < room.seats.length; i++) {
       const s = room.seats[i];

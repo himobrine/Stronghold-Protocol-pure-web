@@ -16,7 +16,11 @@ async function load(path) {
   }
 }
 
-const [battlePart, metaPart] = await Promise.all([load('./bands/battle.js'), load('./bands/meta.js')]);
+/* global __SP_BUNDLE__ */
+const BUNDLED = typeof __SP_BUNDLE__ !== 'undefined' && __SP_BUNDLE__;
+const [battlePart, metaPart] = BUNDLED
+  ? await Promise.all([import('./bands/battle.js'), import('./bands/meta.js')])
+  : await Promise.all([load('./bands/battle.js'), load('./bands/meta.js')]);
 
 export function install(battle) {
   if (typeof battlePart.install === 'function') battlePart.install(battle);

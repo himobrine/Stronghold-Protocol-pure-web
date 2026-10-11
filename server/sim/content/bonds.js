@@ -18,7 +18,11 @@ async function load(path) {
   }
 }
 
-const [core, addon, supportMeta] = await Promise.all([load('./bonds/core.js'), load('./bonds/addon.js'), load('./support/meta.js')]);
+/* global __SP_BUNDLE__ */
+const BUNDLED = typeof __SP_BUNDLE__ !== 'undefined' && __SP_BUNDLE__;
+const [core, addon, supportMeta] = BUNDLED
+  ? await Promise.all([import('./bonds/core.js'), import('./bonds/addon.js'), import('./support/meta.js')])
+  : await Promise.all([load('./bonds/core.js'), load('./bonds/addon.js'), load('./support/meta.js')]);
 const PARTS = Object.freeze([['bonds/core', core], ['bonds/addon', addon]]);
 
 function runAll(fnName, arg, pre = null) {

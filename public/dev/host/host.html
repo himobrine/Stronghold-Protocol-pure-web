@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="dark" />
+  <title>卫戍协议 · In-Page Host</title>
+  <script type="importmap">
+    { "imports": { "preact": "/vendor/preact.module.js", "preact/hooks": "/vendor/hooks.module.js", "htm": "/vendor/htm.module.js" } }
+  </script>
+</head>
+<body style="background:#0c0f0e;color:#c3cbc7;font:14px/1.5 system-ui,sans-serif;padding:16px;margin:0">
+  <h1 style="font-size:16px;margin:0 0 8px">In-Page Host <span style="opacity:.6">PRD M2</span></h1>
+  <p id="hostState" style="margin:0 0 12px;font-family:ui-monospace,monospace">boot…</p>
+  <script type="module">
+    // host.js is the pre-built bundle of host/entry.js (tools/build-host.mjs). On the live page
+    // the main client loads it after rewriting for the Pages base path; this bare page is for
+    // local smoke tests (node tools/build-host.mjs first). Prefer `index.html?host=solo`.
+    import { startHost } from '/dev/host/host.js';
+
+    const state = document.getElementById('hostState');
+    const log = (...a) => console.info('[host]', ...a);
+
+    try {
+      state.textContent = 'fetching data + startHost…';
+      const host = await startHost({ key: 'solo' });
+      state.textContent = `host ready · loopback:solo · data keys=${Object.keys(host.data).length}`;
+      globalThis.__SP_HOST__ = host;
+      log('host ready', host.key);
+    } catch (err) {
+      state.textContent = `host failed: ${err && err.message}`;
+      console.error('[host] failed', err);
+    }
+  </script>
+</body>
+</html>

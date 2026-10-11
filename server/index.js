@@ -23,7 +23,8 @@
 // The server only auto-listens when this file is the process entry point.
 
 import http from 'node:http';
-import { getData, loadData } from './data.js';
+import { loadData, getData as getNodeData } from './dataNode.js';
+import { setDefaultDataProvider } from './data.js';
 import { ROOT, listenAddress, bindCandidates, serveDirs, makeLogger, parseTrustProxy } from './http/config.js';
 import { WS_MAX_PAYLOAD, createSessionStack, attachWebSocket } from './http/websocket.js';
 import { DATA_SHIM_JS, createStaticHandler } from './http/static.js';
@@ -62,7 +63,10 @@ export async function startServer(opts = {}) {
   const { publicDir, dataDir, sharedDir, packsDir } = serveDirs(opts);
 
   // The process-wide singleton serves the default data dir; a custom dir (tests) gets its own copy.
-  const data = opts.dataDir ? loadData(dataDir, { log }) : getData({ dir: dataDir, log });
+  // Installing it as the default provider lets every getter called without an explicit data object
+  // (gamedata.js, builtinMeta.js, sim/content/support) resolve through the same singleton.
+  const data = opts.dataDir ? loadData(dataDir, { log }) : getNodeData({ dir: dataDir, log });
+  setDefaultDataProvider(() => data);
   const { registry, lobby, network } = createSessionStack(opts, { data, log });
   // content packs (docs/PACKS.md): scanned now — the start log names them — and again whenever their folders change
   const packs = createPackRegistry({ publicDir, dataDir, packsDir }, { log });

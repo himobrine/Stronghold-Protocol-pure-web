@@ -3,7 +3,10 @@
 // Only mixed human/AI matches; no RNG, decisions, timer scheduling or battle changes.
 // Enabled by default; SP_BOT_EMOTES=0 disables every entry point.
 import { EMOTES, EMOTE_COOLDOWN_MS } from '../../shared/constants.js';
-export const BOT_EMOTES_ON = process.env.SP_BOT_EMOTES !== '0';
+
+// `typeof process` guard so the match code bundles into the browser host runtime (PRD M2) without
+// esbuild needing a define for this file; the Node server still reads the env var as before.
+export const BOT_EMOTES_ON = (typeof process !== 'undefined' && process.env ? process.env.SP_BOT_EMOTES : undefined) !== '0';
 const E = (name) => `autochess_battle_${name}`;
 export function hasHumans(m) {
   return !!m?.order?.some((p) => p && !p.isBot) && !!m?.order?.some((p) => p?.isBot);

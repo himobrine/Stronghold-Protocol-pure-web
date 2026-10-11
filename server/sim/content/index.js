@@ -41,9 +41,17 @@ async function safeImport(path) {
   }
 }
 
-const KIT_REGISTRY = await safeImport('./kits/index.js');
+/* global __SP_BUNDLE__ */
+// In a host bundle tools/build-host.mjs defines __SP_BUNDLE__ true; the Node / served-/sim/ path leaves it
+// undefined so it is typed false. esbuild dead-code-eliminates the other arm and statically resolves the
+// import()s that remain, so every content module is in the host graph and a broken kit still degrades alone
+// on the server (safeImport logs and returns {}).
+const BUNDLED = typeof __SP_BUNDLE__ !== 'undefined' && __SP_BUNDLE__;
+const KIT_REGISTRY = BUNDLED ? await import('./kits/index.js') : await safeImport('./kits/index.js');
 const DOMAIN_NAMES = ['tokens', 'devices', 'enemies', 'bosses', 'bonds', 'garrisons', 'items', 'bands', 'choices'];
-const DOMAINS = await Promise.all(DOMAIN_NAMES.map((n) => safeImport(`./${n}.js`)));
+const DOMAINS = BUNDLED
+  ? await Promise.all(DOMAIN_NAMES.map((n) => import(`./${n}.js`)))
+  : await Promise.all(DOMAIN_NAMES.map((n) => safeImport(`./${n}.js`)));
 const tokens = DOMAINS[0];
 
 /**
