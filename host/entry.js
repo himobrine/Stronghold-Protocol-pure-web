@@ -157,7 +157,10 @@ export async function startHost(opts = {}) {
       try {
         const room = [...lobby.rooms.values()].find((r) => r.mode === 'solo' && r.match);
         if (!room || !room.match) return;
-        const snap = snapshotMatch(room.match, intents);
+        // pass the human session so a restored host can recreate it (token → same playerId after refresh)
+        const humanSeat = room.seats.find((s) => s && !s.isBot);
+        const session = humanSeat ? lobby.registry.byId(humanSeat.playerId) : null;
+        const snap = snapshotMatch(room.match, intents, session);
         putSnapshot(snapKey, snap, snapDeps).catch((e) => log.warn?.('[host] snapshot save failed', e));
       } catch (e) { log.warn?.('[host] snapshot capture failed', e); }
     }, snapshotEveryMs);

@@ -243,6 +243,20 @@ export class SessionRegistry {
   /** @param {string} playerId @returns {Session | null} */
   byId(playerId) { return this.byPlayerId.get(playerId) || null; }
 
+  /**
+   * Insert a pre-made session (PRD M3 snapshot restore: the host recreates the human's session with its original
+   * playerId + reconnect token so the returning client's hello resolves back to the same seat). Refuses if either
+   * the playerId or the token is already taken. Returns the adopted session, or null on conflict.
+   * @param {Session} s
+   * @returns {Session | null}
+   */
+  adopt(s) {
+    if (!s || this.byPlayerId.has(s.playerId) || this.byTokenMap.has(s.token)) return null;
+    this.byPlayerId.set(s.playerId, s);
+    this.byTokenMap.set(s.token, s);
+    return s;
+  }
+
   /** @param {Session} s */
   remove(s) {
     if (this.byPlayerId.get(s.playerId) === s) this.byPlayerId.delete(s.playerId);

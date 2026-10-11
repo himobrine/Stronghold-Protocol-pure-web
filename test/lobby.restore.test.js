@@ -90,11 +90,24 @@ test('a restored room accepts new intents routed through routeGame (host resumes
   // a fresh session stands in for the returning player (real browsers reuse the reconnect token → same playerId);
   // remap the snapshot's seat to this session's id so routeGame resolves it
   const session = registry.create('P0');
-  const snap = { ...snap0, seats: snap0.seats.map((s) => (s && !s.isBot ? { ...s, playerId: session.playerId } : s)), intents: (snap0.intents || []).map((it) => ({ ...it, playerId: session.playerId })) };
+  const snap = { ...snap0, session: { playerId: session.playerId, token: session.token, name: 'P0' }, seats: snap0.seats.map((s) => (s && !s.isBot ? { ...s, playerId: session.playerId } : s)), intents: (snap0.intents || []).map((it) => ({ ...it, playerId: session.playerId })) };
   const room = lobby.restoreFromSnapshot(snap);
   assert.ok(room);
   session.roomCode = room.code;
   const res = lobby.routeGame(session, { t: 'g.ready', ready: true });
   assert.ok(res && res.ok === true, 'routeGame accepts the fresh intent');
   assert.ok(seen.includes(`${session.playerId}:g.ready`), 'onMatchIntent tapped the fresh intent');
+});
+
+test('restoreFromSnapshot recreates the human session so the client token resolves back (PRD M3 refresh)', () => {
+  const snap = { ...soloSnap(), session: { playerId: 'p_restore', token: 'tok_restore_1234567890abcdef', name: 'Returning' } };
+  const { registry, lobby } = makeLobby({
+    matchRestore: (s, wiring) => restoreMatch(s, { data: DATA, Match, VirtualScheduler, send: wiring.send, broadcast: wiring.broadcast, onEnd: wiring.onEnd, log: QUIET }),
+  });
+  const room = lobby.restoreFromSnapshot(snap);
+  assert.ok(room, 'the room is restored');
+  const restoredSession = registry.byToken('tok_restore_1234567890abcdef');
+  assert.ok(restoredSession, 'the stored token resolves to a session after restore');
+  assert.equal(restoredSession.playerId, 'p_restore', 'the restored session has the original playerId');
+  assert.equal(restoredSession.roomCode, room.code, 'the restored session points at the restored room');
 });

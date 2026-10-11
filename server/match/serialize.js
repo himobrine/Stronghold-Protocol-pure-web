@@ -23,12 +23,15 @@ export const RNG_NAMES = Object.freeze(['setup', 'shop', 'waves', 'draft', 'bots
 /**
  * Capture the minimal replay inputs of a live Match. `intents` is the ordered list of human C2S frames the host
  * has fed the match so far (`{ playerId, t, … }`); the host records them as they arrive (server/match/match/intents.js
- * _handle is the single entry point for every human action).
+ * _handle is the single entry point for every human action). `session` (optional) carries the human player's
+ * reconnect token so a restored host can recreate the session in its registry (PRD M3: after a page refresh the
+ * new host's registry is empty; without the token the returning client's hello would mint a new session).
  * @param {import('./Match.js').Match} m
  * @param {Array<{ playerId: string, t: string }>} intents ordered human intents replayed by restoreMatch
+ * @param {{ playerId: string, token: string, name: string }} [session] the human session's reconnect identity
  * @returns {object} a JSON-safe snapshot (no timers, no live rng closures)
  */
-export function snapshotMatch(m, intents = []) {
+export function snapshotMatch(m, intents = [], session = null) {
   if (!m || typeof m !== 'object' || !m.players) throw new TypeError('snapshotMatch: a live Match is required');
   const rng = {};
   for (const name of RNG_NAMES) {
@@ -50,6 +53,11 @@ export function snapshotMatch(m, intents = []) {
     botRehearsal: m.botRehearsal,
     rng,
     intents: Array.isArray(intents) ? intents.slice() : [],
+    // the human session's reconnect identity — lets a restored host recreate the session so the client's
+    // stored token resolves back to the same playerId (PRD M3 refresh restore)
+    session: session && typeof session === 'object' && typeof session.playerId === 'string' && typeof session.token === 'string'
+      ? { playerId: session.playerId, token: session.token, name: session.name || '' }
+      : null,
     seats: [...m.players.values()].map((ps) => ({
       playerId: ps.playerId, seat: ps.seat, name: ps.name, isBot: !!ps.isBot,
       connected: !ps.left && !!ps.connected, left: !!ps.left, alive: !!ps.alive, autoplay: !!ps.autoplay,

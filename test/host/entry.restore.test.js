@@ -78,6 +78,11 @@ test('a solo room started through startHost can be persisted to a snapshot and r
   const before = room.match ? { phase: room.match.phase, round: room.match.round, seed: room.match.seed } : null;
   assert.ok(before && before.seed != null, `a match is running (start=${JSON.stringify(started)} state=${JSON.stringify(before)})`);
 
+  // capture the client's reconnect token — after a refresh this is what sessionStorage keeps
+  const welcome = client.inbox.find((m) => m.t === 'welcome');
+  assert.ok(welcome && welcome.token, `welcome carries a reconnect token (${JSON.stringify(welcome)})`);
+  const savedToken = welcome.token;
+
   // let the interval persist a snapshot, then shut the host down (the page is about to "refresh")
   await new Promise((r) => setTimeout(r, 120));
   host.close();
@@ -93,4 +98,24 @@ test('a solo room started through startHost can be persisted to a snapshot and r
   assert.equal(restored.match.phase, before.phase, 'the restored match is in the same phase');
   assert.equal(restored.match.round, before.round, 'the restored match is at the same round');
   assert.equal(restored.match.seed, before.seed, 'the restored match kept the original seed');
+
+  // the session is restored: the client's stored token resolves back to the same playerId + room
+  const restoredSession = host2.registry.byToken(savedToken);
+  assert.ok(restoredSession, 'the client reconnect token resolves to a session after restore');
+  assert.equal(restoredSession.roomCode, restored.code, 'the restored session points at the restored room');
+  const originalSeat = restored.seats.find((s) => s && !s.isBot);
+  assert.equal(restoredSession.playerId, originalSeat.playerId, 'the restored session has the original playerId');
+
+  // a fresh client reconnecting with the stored token gets back into the room
+  const client2 = makeClient(hub2, 'solo');
+  await client2.open;
+  const rehello = await client2.request('hello', { name: 'M3', token: savedToken });
+  assert.ok(!rehello.error, `rehello with saved token ok (${JSON.stringify(rehello)})`);
+  assert.equal(rehello.playerId, originalSeat.playerId, 'rehello returns the original playerId');
+  assert.equal(rehello.resumed, true, 'the session is resumed, not new');
+  // onHello pushes room.state to the resumed session — the room code is delivered there, not in welcome
+  const roomState = await client2.waitMsg((m) => m.t === 'room.state');
+  assert.ok(roomState, 'room.state is pushed after rehello');
+  assert.equal(roomState.code, restored.code, 'the pushed room state carries the restored room code');
+  client2.close();
 });

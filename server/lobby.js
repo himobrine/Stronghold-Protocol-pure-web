@@ -101,7 +101,7 @@
 import { randomHex, randomInt } from './rand.js';
 import { ERR, MAX_SEATS, MAX_SPECTATORS, ROOM_CODE_LEN, modeIdFor } from '../shared/constants.js';
 import { checkLoadout, checkLoadoutOps, cultivationCharIds, checkNotOwned, checkDiyPicks } from '../shared/protocol.js';
-import { encode, isDroppable, isErrCode, sendRaw, sendSession } from './netCore.js';
+import { encode, isDroppable, isErrCode, sendRaw, sendSession, Session } from './netCore.js';
 import { lookup } from './dataGetters.js';
 import { Match as DefaultMatch } from './match/Match.js';
 import { KITTED_CHARS } from './sim/content/kits/index.js';
@@ -771,6 +771,19 @@ export class Lobby {
     room.matchCtx = ctx;
     room.replay = null;
     this.rooms.set(code, room);
+    // recreate the human session so the client's stored reconnect token resolves back to the same playerId
+    // (PRD M3: after a page refresh the new host's registry is empty; without this the returning client's
+    // hello would mint a new session that cannot find the restored room)
+    if (snap.session && typeof snap.session.token === 'string' && typeof snap.session.playerId === 'string') {
+      const existing = this.registry.byToken(snap.session.token) || this.registry.byId(snap.session.playerId);
+      if (!existing) {
+        const s = new Session({ playerId: snap.session.playerId, token: snap.session.token, name: snap.session.name || '', now: this.now() });
+        this.registry.adopt(s);
+        s.roomCode = code;
+      } else {
+        existing.roomCode = code;
+      }
+    }
     for (const s of room.seats) if (s && !s.isBot) { const sess = this.registry.byId(s.playerId); if (sess) sess.roomCode = code; }
     this.log.info(`[lobby] ${code} restored from snapshot (${snap.mode}/${snap.difficulty}, round ${snap.round})`);
     this.broadcastState(room);
