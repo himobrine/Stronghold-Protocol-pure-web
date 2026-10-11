@@ -39,6 +39,56 @@ function rewriteAbs(text, base) {
 }
 
 /**
+ * Relative import specifiers that climb to the site root carry one '..' too many: on the server
+ * the URL clamp at `/` swallowed it (`../../shared/x.js` from /js/ → /shared/x.js). Under a base
+ * path that extra '..' escapes the site instead, so drop one from every over-deep specifier.
+ * Only real import / export / import() specifiers are touched — never page-relative strings.
+ */
+function rewriteRel(text, depth) {
+  const re = /(\b(?:from|import)\s*\(?\s*)(['"])((?:\.\.\/)+)([^'"]*)\2/g;
+  return text.replace(re, (m, head, quote, ups, rest) => {
+    const n = ups.length / 3;
+    return n > depth ? `${head}${quote}${'../'.repeat(n - 1)}${rest}${quote}` : m;
+  });
+}
+
+/** URL-style normalize ("a/b/../c" → "a/c"). */
+function normalizeUrl(p) {
+  const out = [];
+  for (const seg of p.split('/')) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') out.pop();
+    else out.push(seg);
+  }
+  return `/${out.join('/')}`;
+}
+
+/**
+ * Every relative / absolute import of a shipped module must stay inside the site after the
+ * rewrite — a leftover escape (a specifier the patterns missed) fails the build instead of
+ * the first page load.
+ */
+function checkEscapes(out, base) {
+  const SPEC = /\b(?:from|import)\s*\(?\s*(['"])([^'"]+)\1/g;
+  const problems = [];
+  for (const file of walk(out)) {
+    const rel = path.relative(out, file).split(path.sep).join('/');
+    if (rel.startsWith('vendor/') || rel.endsWith('.min.js')) continue;
+    if (!/\.(?:js|mjs|html)$/.test(file)) continue;
+    const dir = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
+    for (const m of fs.readFileSync(file, 'utf8').matchAll(SPEC)) {
+      const spec = m[2];
+      let abs;
+      if (spec.startsWith('/')) abs = normalizeUrl(spec);
+      else if (spec.startsWith('.')) abs = normalizeUrl(`${base}/${dir}/${spec}`);
+      else continue; // bare specifier — the import map owns it
+      if (abs !== base && !abs.startsWith(`${base}/`)) problems.push(`${rel}: '${spec}' → ${abs}`);
+    }
+  }
+  return problems;
+}
+
+/**
  * Recursive copy without fs.cpSync: on some Windows setups (Node 24 + non-ASCII paths) cpSync
  * dies natively inside the recursion — no JS error, partial output. copyFileSync is stable.
  */
@@ -105,12 +155,17 @@ function main() {
   const TEXT = new Set(['.html', '.js', '.mjs', '.css']);
   let rewritten = 0;
   for (const file of walk(out)) {
-    const rel = path.relative(out, file).split(path.sep);
-    if (rel[0] === 'vendor' || file.endsWith('.min.js')) continue;
-    const isManifest = rel.length === 1 && rel[0] === 'manifest.json';
+    const relParts = path.relative(out, file).split(path.sep);
+    if (relParts[0] === 'vendor' || file.endsWith('.min.js')) continue;
+    const isManifest = relParts.length === 1 && relParts[0] === 'manifest.json';
     if (!TEXT.has(path.extname(file)) && !isManifest) continue;
     const src = fs.readFileSync(file, 'utf8');
-    let dst = base ? rewriteAbs(src, base) : src;
+    let dst = src;
+    if (base) {
+      dst = rewriteAbs(dst, base);
+      const depth = Math.max(0, relParts.length - 2); // directories the file sits under out/
+      dst = rewriteRel(dst, depth);
+    }
     if (isManifest && base) {
       const man = JSON.parse(dst);
       man.id = `${base}/`;
@@ -121,6 +176,15 @@ function main() {
     if (dst !== src) {
       fs.writeFileSync(file, dst);
       rewritten++;
+    }
+  }
+
+  if (base) {
+    const problems = checkEscapes(out, base);
+    if (problems.length) {
+      console.error(`pages-build: ${problems.length} import(s) still escape the site:`);
+      for (const p of problems) console.error(`  ${p}`);
+      throw new Error('pages-build: import escapes (see above)');
     }
   }
 
