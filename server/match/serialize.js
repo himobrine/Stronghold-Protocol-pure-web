@@ -75,9 +75,11 @@ export function snapshotMatch(m, intents = [], session = null) {
 /**
  * Rebuild a Match from a snapshot by replaying its constructor args and its recorded intent log on a
  * VirtualScheduler. Returns the restored match; the caller wires `send`/`broadcast`/`onEnd` to the new host session
- * and resumes normal intent handling.
+ * and resumes normal intent handling. `ctx.scheduler` overrides the default VirtualScheduler — the browser host
+ * passes a RealScheduler so a restored match runs on real wall-clock deadlines like the original (tools/tests keep
+ * the VirtualScheduler default so a restore replays instantly).
  * @param {object} snap a snapshotMatch() result (v must equal SNAPSHOT_VERSION)
- * @param {{ data: object, Match: Function, VirtualScheduler: Function, send: Function, broadcast: Function, onEnd: Function, log?: object }} ctx
+ * @param {{ data: object, Match: Function, VirtualScheduler: Function, scheduler?: object, send: Function, broadcast: Function, onEnd: Function, log?: object }} ctx
  * @returns {import('./Match.js').Match}
  */
 export function restoreMatch(snap, ctx) {
@@ -87,7 +89,7 @@ export function restoreMatch(snap, ctx) {
     throw new TypeError('restoreMatch: ctx.Match and ctx.VirtualScheduler are required (pass the imports; keeps this module free of side effects)');
   }
   const { data, Match, VirtualScheduler, send, broadcast, onEnd, log } = ctx;
-  const sched = new VirtualScheduler();
+  const sched = ctx.scheduler || new VirtualScheduler();
   const m = new Match({
     roomCode: snap.roomCode, mode: snap.mode, difficulty: snap.difficulty, modeId: snap.modeId,
     seed: snap.seed, seats: snap.seats, data, log, scheduler: sched,
@@ -109,12 +111,15 @@ export function restoreMatch(snap, ctx) {
   }
   m.start();
   // replay the recorded human intents in order; a rejected intent (wrong phase / NOT_IN_ROOM …) is skipped — the
-  // original match also refused it, so the replayed state stays aligned
+  // original match also refused it, so the replayed state stays aligned. In virtual time we runAll() between each
+  // intent so the match advances its (instant) deadlines deterministically; in real time the intents are just fed
+  // in order and the match's own wall-clock timers fire on their real schedule afterwards.
+  const virtual = !!sched.virtual;
   for (const it of snap.intents || []) {
     if (!it || typeof it.t !== 'string') continue;
     try { m.handle(it.playerId, it); } catch { /* a stale intent is dropped, like the original host would */ }
-    sched.runAll();
+    if (virtual) sched.runAll();
   }
-  sched.runAll();
+  if (virtual) sched.runAll();
   return m;
 }

@@ -29,7 +29,7 @@ import { Lobby } from '../server/lobby.js';
 import { CoreNetwork, SessionRegistry, CLOSE } from '../server/netCore.js';
 import { randomHex } from '../server/rand.js';
 import { Match } from '../server/match/Match.js';
-import { VirtualScheduler } from '../server/match/scheduler.js';
+import { RealScheduler, VirtualScheduler } from '../server/match/scheduler.js';
 import { snapshotMatch, restoreMatch } from '../server/match/serialize.js';
 import { putSnapshot, getSnapshot, deleteSnapshot } from './snapshotStore.js';
 
@@ -129,7 +129,7 @@ export async function startHost(opts = {}) {
   let snapshotTimer = null;
   let restoredRoom = null;
   const matchRestore = wantSnapshot
-    ? (snap, wiring) => restoreMatch(snap, { data, Match, VirtualScheduler, send: wiring.send, broadcast: wiring.broadcast, onEnd: wiring.onEnd, log })
+    ? (snap, wiring) => restoreMatch(snap, { data, Match, VirtualScheduler, scheduler: new RealScheduler({ now: opts.now || Date.now }), send: wiring.send, broadcast: wiring.broadcast, onEnd: wiring.onEnd, log })
     : null;
   const onMatchIntent = wantSnapshot
     ? (playerId, msg) => { if (msg && typeof msg.t === 'string' && msg.t.startsWith('g.')) intents.push({ playerId, t: msg.t, ...msg }); }

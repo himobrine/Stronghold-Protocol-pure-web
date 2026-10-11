@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Match } from '../../server/match/Match.js';
-import { VirtualScheduler } from '../../server/match/scheduler.js';
+import { RealScheduler, VirtualScheduler } from '../../server/match/scheduler.js';
 import { getData } from '../../server/data.js';
 import { snapshotMatch, restoreMatch, SNAPSHOT_VERSION, RNG_NAMES } from '../../server/match/serialize.js';
 import { FakeBattle } from './fakeBattle.js';
@@ -150,6 +150,25 @@ test('a restored match can be driven to SETTLE without crashing (lifecycle smoke
     restored.sched.runAll();
   }
   assert.ok(restored.round >= 2, `restored match advanced past round 2 (got ${restored.phase} R${restored.round})`);
+});
+
+test('restoreMatch accepts a caller-supplied scheduler (browser host restores onto RealScheduler)', () => {
+  const h = startMatch({ seed: 53 });
+  driveTo(h, 'PREP', 1);
+  const snap = snapshotMatch(h.m, h.intents);
+  const sched = new RealScheduler({ now: () => 0 });
+  // RealScheduler can't advance deadlines synchronously during the replay (real timers fire on wall-clock afterwards),
+  // so unlike the VirtualScheduler path this only guarantees: no throw, the supplied scheduler is adopted, and the
+  // replayed intent log is accepted. Deterministic replay convergence is covered by the VirtualScheduler tests above.
+  const restored = restoreMatch(JSON.parse(JSON.stringify(snap)), { data: DATA, Match, VirtualScheduler, scheduler: sched, send: () => true, broadcast: () => {}, onEnd: () => {}, log: QUIET });
+  assert.equal(restored.sched, sched, 'the restored match runs on the supplied scheduler');
+  assert.equal(restored.seed, snap.seed, 'the restored match kept the original seed');
+  // the replay couldn't advance INFO_CHECK on a real scheduler (deadlines fire on wall-clock afterwards), so the
+  // match is still in INFO_CHECK — g.infoReady is the valid intent here, proving the intent log was accepted
+  const res = restored.handle('p_0', { t: 'g.infoReady' });
+  assert.ok(res && res.ok === true, 'the restored match accepts fresh intents on the real scheduler');
+  assert.equal(restored.players.get('p_0').infoReady, true, 'the fresh intent took effect');
+  sched.dispose();
 });
 
 test('restoreMatch rejects a foreign snapshot version', () => {
