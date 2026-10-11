@@ -1,0 +1,49 @@
+name: GitHub Pages
+
+# Static site for the pure-web fork (PRD M5 direction): public/ + shared/ + data/ + sim/ assembled
+# by tools/pages-build.mjs with the /<repo-name>/ base-path rewrite, deployed with the Pages action.
+
+on:
+  push:
+    branches: [m1-transport]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: build & deploy static site
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install (npm ci → postinstall copies public/vendor)
+        run: npm ci --no-audit --no-fund
+
+      - name: Assemble the static site
+        run: node tools/pages-build.mjs --base "/${{ github.event.repository.name }}"
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
